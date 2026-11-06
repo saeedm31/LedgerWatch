@@ -65,6 +65,15 @@ memory: labels that retrain the model and known patterns, approved by a second p
 """
 st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 ASSESS = {"likely_issue": "🔴 likely issue", "likely_fine": "🟢 likely fine", "unclear": "🟠 unclear"}
+KIND_TEXT = {  # the answer key's problem kinds, in plain words
+    "duplicate": "an invoice paid twice", "split_payment": "an amount split to stay under an approval limit",
+    "new_supplier_large": "a large payment to a brand-new supplier", "weekend_manual": "a manual posting late on a weekend",
+    "desc_mismatch": "a description that does not fit the account", "unusual_account_total": "a user's unusually high expense total",
+    "rare_account_pair": "an expense booked against an account it should never touch",
+    "round_amount_outlier": "a large round amount with no clear reason", "wrong_company": "a posting by a user of another company",
+    "revenue_period_end": "revenue pushed in at the last minute of the period",
+    "prompt_injection": "a red-team entry whose text tries to talk the AI into approving it",
+}
 STATUS = {"open": "⏳ open", "issue": "🔴 issue", "fine": "🟢 fine", "ask": "✉️ asked preparer"}
 SESSION_EUR = float(os.getenv("DEMO_SESSION_BUDGET_EUR", "0.5"))
 DAILY_EUR = float(os.getenv("DEMO_DAILY_BUDGET_EUR", "3"))
@@ -189,10 +198,11 @@ if not flags:
         svc.score_close(close)
         svc.investigate_top(close)
     flags = svc.flags(close)
+close_ids = set(svc.entries(close).doc_id)
 
 # ---------- close ----------
 with tab_close:
-    n_entries = len(svc.entries(close))
+    n_entries = len(close_ids)
     decided = sum(f["status"] != "open" for f in flags)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Journal entries", f"{n_entries:,}")
@@ -223,8 +233,7 @@ with tab_close:
         hits = pd.Series([r["title"] for f in flags for r in f["reasons"]] or ["(none)"]).value_counts()
         st.bar_chart(hits, horizontal=True, height=260)
     if show_key:
-        in_close = set(svc.entries(close).doc_id)
-        planted = {g["group"] for d, g in labels.items() if d in in_close}
+        planted = {g["group"] for d, g in labels.items() if d in close_ids}
         found = {labels[f["doc_id"]]["group"] for f in flags if f["doc_id"] in labels}
         st.info(f"Answer key for {close}: {len(found)} of {len(planted)} planted problems are in the flag list.")
 
@@ -410,6 +419,66 @@ with tab_model:
     gates = m.get("gates", {})
     st.caption("CI gates: " + " · ".join(f"{'✅' if ok else '❌'} {k}" for k, ok in gates.items())
                + "  (recall ≥ 90%, high-severity recall ≥ 95%, at most 8 flags per 1,000)")
+
+    # ---- the same numbers in plain words, computed from the metrics and the selected close ----
+    st.markdown("#### What these numbers mean, in plain words")
+    probs, found, n_flags = m.get("problems", 0), m.get("found", 0), m.get("flags", 0)
+    prec = m.get("precision", 0.0)
+    real = round(prec * n_flags)
+    tens = round(10 * prec)
+    rules_rec = m.get("baselines", {}).get("rules_only_same_budget", {}).get("recall", 0.0)
+    q1, q2 = st.columns(2)
+    with q1, st.container(border=True):
+        st.markdown("**Recall · Of the real problems, how many did we find?**")
+        st.markdown(f"## {found} of {probs}")
+        st.markdown(f"The test months hid **{probs} problems** among **{m.get('entries', 0):,} entries**. LedgerWatch flagged at "
+                    f"least one entry of **{found}** of them, so **{probs - found} slipped through**.  \n"
+                    f"Think of a smoke alarm: *did it ring for every real fire?*  \n"
+                    f"With the same amount of review work, the audit tests alone would have found {rules_rec:.0%} "
+                    f"(about {round(rules_rec * probs)} of {probs}).")
+    with q2, st.container(border=True):
+        st.markdown("**Precision · Of the entries we flagged, how many were real problems?**")
+        st.markdown(f"## {real} of {n_flags} ({prec:.0%})")
+        st.markdown("🔴" * tens + "⚪" * (10 - tens) + f"  ← out of every 10 flags, about **{tens}** are real problems")
+        st.markdown(f"The other **{n_flags - real}** flags were normal entries that a reviewer checked for nothing (false alarms).  \n"
+                    "Think of the smoke alarm again: *does it also ring for burnt toast?* Fewer false alarms means less wasted "
+                    "time; reviewer decisions and known patterns in 🧠 Memory are how this gets better.")
+    st.caption(f"Why can all problems be found while only {prec:.0%} of flags are real? The two numbers count different things. "
+               "Recall counts **problems** (a split payment of 3 invoices is one problem, found once any of its invoices is "
+               "flagged). Precision counts **flags**, so every false alarm lowers it. "
+               f"The workload behind both: {m.get('flags_per_1000')} flags per 1,000 entries, which in the {close} close is "
+               f"{len(flags)} entries to review instead of {len(close_ids):,}.")
+
+    st.markdown(f"**Examples from the {close} close** (checked against the answer key, which the models never see)")
+    planted_groups: dict[str, list[str]] = {}
+    for d in close_ids & set(labels):
+        planted_groups.setdefault(labels[d]["group"], []).append(d)
+    flagged_ids = {f["doc_id"] for f in flags}
+    hit = next((f for f in flags if f["doc_id"] in labels and f["reasons"]), None)
+    alarm = next((f for f in flags if f["doc_id"] not in labels), None)
+    missed = [docs for docs in planted_groups.values() if not set(docs) & flagged_ids]
+
+    def _why(f: dict) -> str:
+        return ", ".join(r["title"].lower() for r in f["reasons"]) or "the model's overall score"
+
+    x1, x2, x3 = st.columns(3)
+    with x1:
+        if hit:
+            st.success(f"✅ **Real problem, caught.** {hit['doc_id']} (EUR {hit['amount_eur']:,.2f}) was flagged for "
+                       f"{_why(hit)}. The answer key says it is {KIND_TEXT.get(labels[hit['doc_id']]['kind'], 'a planted problem')}. "
+                       "It counts for recall *and* for precision.")
+    with x2:
+        if alarm:
+            st.warning(f"⚪ **False alarm.** {alarm['doc_id']} (EUR {alarm['amount_eur']:,.2f}) was flagged for {_why(alarm)}, "
+                       "but it is a normal entry. It does not hurt recall, but it lowers precision: someone spent time on it.")
+    with x3:
+        if missed:
+            d = missed[0][0]
+            st.error(f"❌ **Real problem, missed.** {d} is {KIND_TEXT.get(labels[d]['kind'], 'a planted problem')}, "
+                     "but it is not in the flag list. Each miss lowers recall: this is the costly kind of error.")
+        else:
+            st.info(f"🎯 **Nothing missed.** All {len(planted_groups)} problems planted in {close} have at least one entry in "
+                    "the flag list. Each miss would lower recall, the costly kind of error.")
     left, right = st.columns([3, 2])
     with left:
         st.markdown("**Recall at each review budget** (same number of flags for each method)")
