@@ -481,12 +481,15 @@ with tab_model:
                     "the flag list. Each miss would lower recall, the costly kind of error.")
     left, right = st.columns([3, 2])
     with left:
-        st.markdown("**Recall at each review budget** (same number of flags for each method)")
-        curve = pd.DataFrame(m.get("recall_by_budget", []))
-        if not curve.empty:
-            st.line_chart(curve.set_index("flags_per_1000").rename(columns={
-                "risk_model": "Risk model (all signals)", "rules_count": "Audit tests only", "anomaly_only": "Anomaly model only"}),
-                height=300, x_label="flags per 1,000 entries", y_label="recall")
+        with st.expander("📈 For data scientists: how many problems each method finds with less or more review time"):
+            st.caption("Each line is one method. Left = the team reviews very few entries, right = many. Higher = more "
+                       "problems found. The risk model reaches all problems with about 6 flags per 1,000 entries; the "
+                       "audit tests alone need about 10.")
+            curve = pd.DataFrame(m.get("recall_by_budget", []))
+            if not curve.empty:
+                st.line_chart(curve.set_index("flags_per_1000").rename(columns={
+                    "risk_model": "Risk model (all signals)", "rules_count": "Audit tests only", "anomaly_only": "Anomaly model only"}),
+                    height=280, x_label="flags per 1,000 entries (review work)", y_label="share of problems found")
     with right:
         st.markdown("**Found per problem kind**")
         st.dataframe(pd.DataFrame([{"Kind": k.replace("_", " "), "Found": v} for k, v in m.get("per_kind", {}).items()]),
