@@ -1,0 +1,2 @@
+# Only for LW_ENGINE=snowflake
+snowflake-connector-python[pandas]>=3.12

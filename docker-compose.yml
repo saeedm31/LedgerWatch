@@ -1,0 +1,43 @@
+# The app plus the two MCP servers as separate services over Streamable HTTP, sharing one data volume.
+#   docker compose up --build      then open http://localhost:8501
+# For Snowflake: set LW_ENGINE=snowflake and the SNOWFLAKE_* variables in .env.
+x-common: &common
+  build: .
+  environment: &env
+    LW_DATA_DIR: /data
+    LW_ENGINE: "${LW_ENGINE:-duckdb}"
+    SNOWFLAKE_ACCOUNT: "${SNOWFLAKE_ACCOUNT:-}"
+    SNOWFLAKE_USER: "${SNOWFLAKE_USER:-}"
+    SNOWFLAKE_PASSWORD: "${SNOWFLAKE_PASSWORD:-}"
+    SNOWFLAKE_PRIVATE_KEY: "${SNOWFLAKE_PRIVATE_KEY:-}"
+    SNOWFLAKE_WAREHOUSE: "${SNOWFLAKE_WAREHOUSE:-}"
+    SNOWFLAKE_DATABASE: "${SNOWFLAKE_DATABASE:-}"
+    SNOWFLAKE_SCHEMA: "${SNOWFLAKE_SCHEMA:-LEDGERWATCH}"
+    SNOWFLAKE_ROLE: "${SNOWFLAKE_ROLE:-}"
+  volumes: [lwdata:/data]
+
+services:
+  init:  # builds the simulated ledger and trains model v1 if they are not there yet
+    <<: *common
+    command: ["python", "-m", "ledgerwatch", "ensure"]
+  ledger:
+    <<: *common
+    command: ["python", "-m", "ledgerwatch.mcp_servers.ledger", "--http", "8201"]
+    environment: {<<: *env, MCP_ALLOWED_HOSTS: "ledger:*"}
+    depends_on: {init: {condition: service_completed_successfully}}
+  casebook:
+    <<: *common
+    command: ["python", "-m", "ledgerwatch.mcp_servers.casebook", "--http", "8202"]
+    environment: {<<: *env, MCP_ALLOWED_HOSTS: "casebook:*"}
+    depends_on: {init: {condition: service_completed_successfully}}
+  app:
+    <<: *common
+    ports: ["8501:8501"]
+    environment:
+      <<: *env
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      MCP_URLS: "ledger=http://ledger:8201/mcp,casebook=http://casebook:8202/mcp"
+    depends_on: [ledger, casebook]
+
+volumes:
+  lwdata:

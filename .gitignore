@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+mlruns/
+.env
+.streamlit/secrets.toml
+eval_report*.json
