@@ -1,0 +1,34 @@
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      live_agent_eval:
+        description: Also run the agent eval with Claude (costs a few cents; needs the ANTHROPIC_API_KEY secret)
+        type: boolean
+        default: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest -q
+      - name: Model eval gates (recall, high-severity recall, review workload)
+        run: python -m ledgerwatch eval
+      - name: Agent eval (scripted playbook)
+        run: python -m ledgerwatch agent-eval
+      - name: Agent eval with Claude (manual runs only)
+        if: ${{ inputs.live_agent_eval }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m ledgerwatch agent-eval --live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-reports
+          path: eval_report*.json
