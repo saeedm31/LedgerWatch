@@ -37,6 +37,13 @@ Same recall as running every audit test, with **40% less review work** and about
 
 ## How it works
 
+![How LedgerWatch works](docs/architecture.svg)
+
+**Documentation:** [architecture](docs/architecture.md) · [model card](docs/model_card.md) · [data card](docs/data_card.md) · [decision records](docs/adr/) · [AWS deploy](deploy/aws/README.md)
+
+<details>
+<summary>Same flow as a Mermaid diagram</summary>
+
 ```mermaid
 flowchart LR
   SAP[(SAP S/4HANA<br/>journal entries)] --> WH[(Snowflake or DuckDB<br/>ledger, read-only)]
@@ -51,6 +58,8 @@ flowchart LR
   MEM -- retrain + eval gates --> DET
   MEM -- silence soft tests --> DET
 ```
+
+</details>
 
 **1. Classic ML finds the entries** (scikit-learn, all trained on the first 9 months):
 
@@ -124,6 +133,7 @@ ledgerwatch/
   agent/                    LangGraph agent, prompts, scripted model, grounding check
   mcp_servers/              ledger and casebook MCP servers (read-only)
   audit.py, tracking.py     hash-chained audit log; MLflow or JSON run tracking
+docs/                       architecture, model card, data card, decision records
 deploy/aws/                 Terraform and the deploy guide
 tests/                      end-to-end tests on a freshly built ledger
 ```
